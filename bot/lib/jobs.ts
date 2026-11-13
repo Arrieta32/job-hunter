@@ -56,6 +56,151 @@ export function hasDotNetInTitle(job: { title: string }): boolean {
   return DOTNET_MARKERS.some((m) => title.includes(m));
 }
 
+/** Non-English / non-Spanish title markers (DE/NL/FR local postings). */
+const NON_TARGET_LANG_MARKERS = [
+  "(m/w/d)",
+  "(m/w/x)",
+  "(w/m/d)",
+  "entwickler",
+  "entwicklung",
+  "ingenieur",
+  "vollzeit",
+  "teilzeit",
+  "festanstellung",
+  "bewerbung",
+  "für ",
+  " und ",
+  "mit kenntnis",
+  "vacature",
+  "ontwikkelaar",
+  "ervaring",
+  "hbo ",
+  "mbo ",
+  "nederland",
+  "développeur",
+  "ingénieur",
+  " CDI",
+  "temps plein",
+];
+
+const LOCAL_EU_MARKERS = [
+  "switzerland",
+  "schweiz",
+  "suisse",
+  "luzern",
+  "zurich",
+  "zürich",
+  "bern",
+  "basel",
+  "geneva",
+  "nederland",
+  "netherlands",
+  "amsterdam",
+  "rotterdam",
+  "utrecht",
+  "germany",
+  "deutschland",
+  "berlin",
+  "munich",
+  "münchen",
+  "hamburg",
+  "frankfurt",
+  "karlsruhe",
+  "stuttgart",
+  "austria",
+  "österreich",
+  "wien",
+  "vienna",
+  "belgium",
+  "bruxelles",
+  "brussels",
+];
+
+const AMERICAS_REMOTE_HINTS = [
+  "remote",
+  "worldwide",
+  "anywhere",
+  "latam",
+  "latin america",
+  "south america",
+  "americas",
+  "usa",
+  "united states",
+  "canada",
+  "mexico",
+  "brazil",
+  "argentina",
+  "chile",
+  "colombia",
+  "peru",
+  "uruguay",
+  "paraguay",
+  "ecuador",
+  "utc-3",
+  "utc-5",
+  "utc-6",
+  "est",
+  "cst",
+  "pst",
+];
+
+export function looksNonEnglishOrSpanish(job: {
+  title: string;
+  description?: string;
+}): boolean {
+  const title = normalize(job.title);
+  const sample = normalize(`${job.title} ${(job.description ?? "").slice(0, 400)}`);
+  if (NON_TARGET_LANG_MARKERS.some((m) => sample.includes(m.trim().toLowerCase()))) {
+    return true;
+  }
+  // German compound job titles often keep ASCII letters but include umlauts in body
+  if (/[äöüß]/.test(sample)) return true;
+  // Title is mostly English/.NET tokens — keep
+  if (/\b(senior|lead|developer|engineer|software|backend|remote|full[\s-]?stack)\b/.test(title)) {
+    return false;
+  }
+  return false;
+}
+
+export function isRemoteFriendlyForMarcos(job: JobListing): boolean {
+  const loc = normalize(job.location);
+  const hay = jobHaystack(job);
+  const saysRemote =
+    loc.includes("remote") ||
+    hay.includes("remote") ||
+    hay.includes("work from home") ||
+    hay.includes("wfh") ||
+    job.source === "remotive" ||
+    job.source === "remoteok";
+
+  const looksLocalEu =
+    LOCAL_EU_MARKERS.some((m) => loc.includes(m) || hay.includes(m)) &&
+    !saysRemote;
+
+  if (looksLocalEu) return false;
+
+  // Arbeitnow EU boards: require explicit remote + not a city-only DE/NL posting
+  if (job.source === "arbeitnow") {
+    if (!saysRemote) return false;
+    // "Remote · Amsterdam" style still OK if remote; prefer Americas hints when present
+  }
+
+  // Prefer Americas/global remote; allow plain "Remote" from remotive/remoteok
+  if (saysRemote) return true;
+
+  return AMERICAS_REMOTE_HINTS.some((h) => loc.includes(h) || hay.includes(h));
+}
+
+export function isEligibleJob(job: JobListing): { ok: boolean; reason?: string } {
+  if (looksNonEnglishOrSpanish(job)) {
+    return { ok: false, reason: "language not ES/EN" };
+  }
+  if (!isRemoteFriendlyForMarcos(job)) {
+    return { ok: false, reason: "not remote / EU-local" };
+  }
+  return { ok: true };
+}
+
 function matchesQuery(job: JobListing, query: string | undefined): boolean {
   if (!query?.trim()) return true;
   const hay = jobHaystack(job);
@@ -189,6 +334,7 @@ async function fetchArbeitnowDotNet(limit: number): Promise<JobListing[]> {
   };
 
   return (data.data ?? [])
+    .filter((job) => Boolean(job.remote))
     .map((job) => {
       const listing: JobListing = {
         id: `arbeitnow:${job.slug ?? job.url ?? job.title ?? Math.random()}`,
@@ -196,7 +342,7 @@ async function fetchArbeitnowDotNet(limit: number): Promise<JobListing[]> {
         title: job.title ?? "Untitled",
         company: job.company_name ?? "Unknown",
         url: job.url ?? "",
-        location: job.remote ? `Remote · ${job.location ?? ""}`.trim() : (job.location ?? "Unknown"),
+        location: `Remote · ${job.location ?? ""}`.trim(),
         tags: job.tags ?? [],
         description: truncate(job.description ?? ""),
         salary: null,
@@ -256,6 +402,8 @@ export async function searchJobListings(input: {
       if (company.includes("lemon.io") && !hasDotNetInTitle(job)) return false;
       return true;
     })
+    // Spanish or English + remote / Americas-friendly (skip EU-local DE/NL/etc.)
+    .filter((job) => isEligibleJob(job).ok)
     .filter((job) => matchesQuery(job, input.query))
     .map((job) => ({ job, score: scoreAgainstKeywords(job, keywords) }))
     .filter((row) => row.score > 0 || Boolean(input.query))
@@ -359,6 +507,15 @@ export function rankJobAgainstProfile(
   if (title.includes("junior") || title.includes("intern")) {
     score -= 20;
     gaps.push("Seniority looks below Tech Lead / Senior");
+  }
+
+  const loc = normalize(job.location);
+  if (AMERICAS_REMOTE_HINTS.some((h) => loc.includes(h))) {
+    score += 8;
+    reasons.push("Americas / remote-friendly location");
+  } else if (loc.includes("remote") || loc.includes("worldwide")) {
+    score += 4;
+    reasons.push("Remote listing");
   }
 
   score = Math.max(0, Math.min(100, score));

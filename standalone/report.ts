@@ -8,7 +8,12 @@
 import { readFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { rankJobAgainstProfile, searchJobListings, type JobListing } from "../bot/lib/jobs.js";
+import {
+  hasDotNetInTitle,
+  rankJobAgainstProfile,
+  searchJobListings,
+  type JobListing,
+} from "../bot/lib/jobs.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -20,6 +25,9 @@ const QUERY = process.env.JOB_QUERY ?? ".net,c#,csharp,asp.net,dotnet";
 const LIMIT = Number(process.env.JOB_LIMIT ?? "15");
 const MIN_SCORE = Number(process.env.JOB_MIN_SCORE ?? "12");
 const REQUIRE_DOTNET = (process.env.JOB_REQUIRE_DOTNET ?? "true").toLowerCase() !== "false";
+// Prefer titles that literally say .NET/C# (avoids weak tag-only matches).
+const REQUIRE_DOTNET_TITLE =
+  (process.env.JOB_REQUIRE_DOTNET_TITLE ?? "true").toLowerCase() !== "false";
 const DRY_RUN = process.argv.includes("--dry-run");
 
 type SeenState = { ids: string[]; updatedAt: string };
@@ -62,6 +70,7 @@ function formatSlack(lines: Array<{
     `*Job Hunter — reporte diario*`,
     `_America/Asuncion · ${new Date().toLocaleString("es-PY", { timeZone: "America/Asuncion" })}_`,
     `Query: \`${QUERY || "(keywords del perfil)"}\` · mínimo score ${MIN_SCORE}`,
+    `_Filtros: .NET/C# · remoto · idioma ES/EN · prioriza LatAm/Américas_`,
     ``,
   ];
 
@@ -123,6 +132,7 @@ async function main(): Promise<void> {
       return { job, ...ranking, isNew: !seen.has(job.id) };
     })
     .filter((row) => row.score >= MIN_SCORE)
+    .filter((row) => (REQUIRE_DOTNET_TITLE ? hasDotNetInTitle(row.job) : true))
     .sort((a, b) => b.score - a.score || Number(b.isNew) - Number(a.isNew))
     .slice(0, LIMIT);
 

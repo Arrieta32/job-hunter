@@ -3,6 +3,21 @@
 Busca ofertas, las rankea con tu `profile.md` y manda un resumen a Slack.
 **No usa Agent SDK / modelos del team.** PC puede estar apagada (GitHub Actions).
 
+## Fuentes y filtros
+
+| Fuente | Qué es |
+| --- | --- |
+| [Remotive](https://remotive.com) | Remotos software-dev, búsqueda `.net` / `csharp` / `asp.net` |
+| [RemoteOK](https://remoteok.com) | Remotos; se filtran los que mencionan .NET/C# |
+| [Arbeitnow](https://www.arbeitnow.com) | Solo si vienen marcados `remote` + .NET/C# |
+
+**Incluye solo si:**
+- hay señal .NET/C#/ASP.NET
+- parece remoto (no EU local on-site)
+- idioma **español o inglés** (se excluyen DE/NL/FR típicos: `m/w/d`, Entwickler, etc.)
+
+**Prioriza:** LatAm / Américas / remote worldwide.
+
 ## 1. Crear Incoming Webhook en Slack
 
 1. En Slack: https://api.slack.com/apps → **Create New App** → From scratch  
@@ -40,5 +55,6 @@ El schedule del workflow: `0 12 * * 1-5` UTC = 09:00 America/Asuncion.
 | `JOB_LIMIT` | `15` |
 | `JOB_MIN_SCORE` | `12` |
 | `JOB_REQUIRE_DOTNET` | `true` |
+| `JOB_REQUIRE_DOTNET_TITLE` | `true` (el título debe decir .NET/C#) |
 
 Editá el perfil en `bot/sandbox/workspace/profile.md`.
