@@ -180,21 +180,22 @@ export function rankJobAgainstProfile(job: {
   reasons: string[];
   gaps: string[];
 } {
-  const hay = normalize(
-    [job.title, job.company, job.location, ...(job.tags ?? []), job.description ?? ""].join(" "),
-  );
+  // Tags-only boards (e.g. Lemon.io mega-lists) inflate matches — weight title/body more.
+  const title = normalize(job.title);
+  const body = normalize([job.company, job.location, job.description ?? ""].join(" "));
+  const tags = normalize((job.tags ?? []).slice(0, 12).join(" "));
   const profile = normalize(profileText);
   const reasons: string[] = [];
   const gaps: string[] = [];
   let score = 0;
 
   const positives: Array<[string, number, string]> = [
-    [".net", 18, "Strong .NET match"],
-    ["c#", 16, "C# mentioned"],
-    ["asp.net", 12, "ASP.NET stack"],
-    ["tech lead", 14, "Leadership title fit"],
-    ["engineering lead", 12, "Lead role"],
-    ["backend", 10, "Backend focus"],
+    [".net", 22, "Strong .NET match"],
+    ["c#", 20, "C# mentioned"],
+    ["asp.net", 14, "ASP.NET stack"],
+    ["tech lead", 18, "Leadership title fit"],
+    ["engineering lead", 14, "Lead role"],
+    ["backend", 12, "Backend focus"],
     ["microservices", 8, "Microservices"],
     ["fintech", 10, "Fintech domain"],
     ["bank", 8, "Banking domain"],
@@ -202,28 +203,38 @@ export function rankJobAgainstProfile(job: {
     ["postgresql", 6, "PostgreSQL"],
     ["azure", 5, "Azure"],
     ["aws", 4, "AWS"],
-    ["remote", 4, "Remote-friendly"],
   ];
 
   for (const [needle, points, label] of positives) {
-    if (hay.includes(needle) && profile.includes(needle.replace("bank", "banking").split(" ")[0]!)) {
-      score += points;
-      reasons.push(label);
-    } else if (hay.includes(needle)) {
-      score += Math.floor(points / 2);
+    const inTitle = title.includes(needle);
+    const inBody = body.includes(needle);
+    const inTags = tags.includes(needle);
+    if (!inTitle && !inBody && !inTags) continue;
+
+    let gained = 0;
+    if (inTitle) gained += points;
+    else if (inBody) gained += Math.floor(points * 0.7);
+    else gained += Math.floor(points * 0.2); // tags-only: weak signal
+
+    if (profile.includes(needle.replace("bank", "banking").split(" ")[0]!)) {
+      score += gained;
+      reasons.push(inTitle ? label : `${label}${inTags && !inBody ? " (tags)" : ""}`);
+    } else {
+      score += Math.floor(gained / 2);
       reasons.push(`${label} (job-side)`);
     }
   }
 
-  if (hay.includes("frontend") && !hay.includes("backend") && !hay.includes(".net")) {
-    score -= 15;
-    gaps.push("Looks frontend-heavy vs Marcos's backend/.NET lead profile");
+  if ((title.includes("react") || title.includes("frontend") || title.includes("rails")) &&
+      !title.includes(".net") && !title.includes("c#") && !title.includes("backend")) {
+    score -= 18;
+    gaps.push("Title stack looks off-profile (.NET/backend lead)");
   }
-  if (hay.includes("junior") || hay.includes("intern")) {
+  if (title.includes("junior") || title.includes("intern")) {
     score -= 20;
     gaps.push("Seniority looks below Tech Lead / Senior");
   }
-  if (!hay.includes("remote") && hay.includes("on-site")) {
+  if (!body.includes("remote") && !title.includes("remote") && body.includes("on-site")) {
     gaps.push("May require on-site; confirm relocation/hybrid");
   }
 

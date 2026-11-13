@@ -1,37 +1,30 @@
 # job-hunter
 
-Agente Cursor (Agent SDK) con supervisión humana para Marcos Arrieta.
+Herramientas para Marcos Arrieta: buscar y rankear ofertas .NET / Tech Lead, con supervisión humana (sin auto-apply).
 
-- Busca ofertas (Remotive + RemoteOK)
-- Rankea contra `bot/sandbox/workspace/profile.md`
-- Prepara borradores de postulación
-- Reportes Slack Lun–Vie ~09:00 America/Asuncion
-- **No aplica solo** y **no automatiza LinkedIn**
+## Opción recomendada ahora: standalone + Slack webhook
 
-## Local
+No depende de modelos Cursor ni del team Itti.
+
+→ Guía completa: [`standalone/README.md`](./standalone/README.md)
 
 ```bash
-cd job-hunter
-npx @grok/agent-sdk@0.6.0 login
-npx @grok/agent-sdk@0.6.0 slack create --dir . --name "Job Hunter"
-npx @grok/agent-sdk@0.6.0 slack doctor --prefix JOB_HUNTER
-npx @grok/agent-sdk@0.6.0 dev
+npm install
+npm run report:dry
+SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...' npm run report
 ```
 
-Playground: URL que imprime `dev`.  
-Disparo manual del schedule:
+Cron automático: GitHub Action Lun–Vie 09:00 America/Asuncion (secret `SLACK_WEBHOOK_URL`).
+
+## Agent SDK (pausado)
+
+Hay un agente Cursor en `bot/` + deploy `job-hunter`, pero el team **Itti** bloquea modelos (`Model Blocked`). Cuando un admin habilite modelos, se puede retomar Slack Socket Mode / playground.
 
 ```bash
-curl -X POST http://127.0.0.1:3000/job-hunter/v1/dev/schedules/morning-report
+npx @grok/agent-sdk@0.6.0 validate --dir .
+npx @grok/agent-sdk@0.6.0 deploy --dir . --ref cursor/job-hunter-cc45
 ```
 
-Antes del schedule automático, en Slack: *“Suscribime al reporte diario en este canal”* (o seteá `JOB_HUNTER_SLACK_CHANNEL_ID`).
+## Perfil
 
-## Deploy (hosted)
-
-1. Subí este repo a GitHub y hacé push.
-2. `npx @grok/agent-sdk@0.6.0 slack create --dir . --name "Job Hunter" --env prod`
-3. `npx @grok/agent-sdk@0.6.0 validate --dir .`
-4. `npx @grok/agent-sdk@0.6.0 deploy --dir . --dry-run`
-5. `npx @grok/agent-sdk@0.6.0 deploy --dir .` (guardá el alias token)
-6. Dashboard: https://cursor.com/dashboard/deployed-agents
+`bot/sandbox/workspace/profile.md` (armado desde tus CVs).
