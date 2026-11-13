@@ -1,6 +1,6 @@
 export type JobListing = {
   id: string;
-  source: "remotive" | "remoteok";
+  source: "remotive" | "remoteok" | "arbeitnow";
   title: string;
   company: string;
   url: string;
@@ -13,9 +13,11 @@ export type JobListing = {
 
 const DEFAULT_KEYWORDS = [
   ".net",
+  "dotnet",
   "c#",
   "csharp",
   "asp.net",
+  "aspnet",
   "tech lead",
   "engineering lead",
   "backend",
@@ -24,61 +26,71 @@ const DEFAULT_KEYWORDS = [
   "microservices",
   "oracle",
   "postgresql",
+  "azure",
 ];
+
+const DOTNET_MARKERS = [".net", "dotnet", "c#", "csharp", "asp.net", "aspnet", "f#"];
 
 function normalize(text: string): string {
   return text.toLowerCase();
 }
 
-function truncate(text: string, max = 1200): string {
+function truncate(text: string, max = 1600): string {
   const cleaned = text.replace(/\s+/g, " ").trim();
   return cleaned.length <= max ? cleaned : `${cleaned.slice(0, max)}…`;
 }
 
-function matchesQuery(job: JobListing, query: string | undefined): boolean {
-  if (!query?.trim()) return true;
-  const hay = normalize(
+function jobHaystack(job: JobListing): string {
+  return normalize(
     [job.title, job.company, job.location, job.tags.join(" "), job.description].join(" "),
   );
+}
+
+export function hasDotNetSignal(job: JobListing): boolean {
+  const hay = jobHaystack(job);
+  return DOTNET_MARKERS.some((m) => hay.includes(m));
+}
+
+export function hasDotNetInTitle(job: { title: string }): boolean {
+  const title = normalize(job.title);
+  return DOTNET_MARKERS.some((m) => title.includes(m));
+}
+
+function matchesQuery(job: JobListing, query: string | undefined): boolean {
+  if (!query?.trim()) return true;
+  const hay = jobHaystack(job);
   return query
     .toLowerCase()
-    .split(/\s+/)
+    .split(/[\s,]+/)
     .filter(Boolean)
-    .every((token) => hay.includes(token));
+    .some((token) => hay.includes(token));
 }
 
 function scoreAgainstKeywords(job: JobListing, keywords: string[]): number {
-  const hay = normalize(
-    [job.title, job.company, job.tags.join(" "), job.description].join(" "),
-  );
+  const hay = jobHaystack(job);
   let score = 0;
   for (const keyword of keywords) {
     if (hay.includes(keyword)) score += 1;
   }
+  // Prefer real .NET titles over mega-tag noise
+  if (hasDotNetInTitle(job)) score += 5;
   return score;
 }
 
-async function fetchRemotive(limit: number): Promise<JobListing[]> {
-  const res = await fetch("https://remotive.com/api/remote-jobs?category=software-dev");
-  if (!res.ok) {
-    throw new Error(`Remotive HTTP ${res.status}`);
-  }
-  const data = (await res.json()) as {
-    jobs?: Array<{
-      id: number | string;
-      url?: string;
-      title?: string;
-      company_name?: string;
-      candidate_required_location?: string;
-      tags?: string[];
-      description?: string;
-      salary?: string;
-      publication_date?: string;
-    }>;
-  };
-  return (data.jobs ?? []).slice(0, limit).map((job) => ({
+function mapRemotiveJob(job: {
+  id: number | string;
+  url?: string;
+  title?: string;
+  company_name?: string;
+  candidate_required_location?: string;
+  tags?: string[];
+  description?: string;
+  salary?: string;
+  publication_date?: string;
+}): JobListing {
+  return {
     id: `remotive:${job.id}`,
-    source: "remotive" as const,
+    source: "remotive",
     title: job.title ?? "Untitled",
     company: job.company_name ?? "Unknown",
     url: job.url ?? "",
@@ -87,20 +99,47 @@ async function fetchRemotive(limit: number): Promise<JobListing[]> {
     description: truncate(job.description ?? ""),
     salary: job.salary || null,
     publishedAt: job.publication_date ?? null,
-  }));
+  };
+}
+
+async function fetchRemotiveSearch(search: string, limit: number): Promise<JobListing[]> {
+  const url = new URL("https://remotive.com/api/remote-jobs");
+  url.searchParams.set("category", "software-dev");
+  url.searchParams.set("search", search);
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`Remotive HTTP ${res.status} (${search})`);
+  }
+  const data = (await res.json()) as { jobs?: Array<Parameters<typeof mapRemotiveJob>[0]> };
+  return (data.jobs ?? []).slice(0, limit).map(mapRemotiveJob);
+}
+
+async function fetchRemotiveDotNet(limit: number): Promise<JobListing[]> {
+  const queries = [".net", "csharp", "asp.net", "dotnet"];
+  const byId = new Map<string, JobListing>();
+  const errors: string[] = [];
+  await Promise.all(
+    queries.map(async (q) => {
+      try {
+        const jobs = await fetchRemotiveSearch(q, limit);
+        for (const job of jobs) byId.set(job.id, job);
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : String(error));
+      }
+    }),
+  );
+  if (byId.size === 0 && errors.length) throw new Error(errors[0]);
+  return [...byId.values()];
 }
 
 async function fetchRemoteOk(limit: number): Promise<JobListing[]> {
   const res = await fetch("https://remoteok.com/api", {
     headers: { "User-Agent": "job-hunter-agent/0.1" },
   });
-  if (!res.ok) {
-    throw new Error(`RemoteOK HTTP ${res.status}`);
-  }
+  if (!res.ok) throw new Error(`RemoteOK HTTP ${res.status}`);
   const data = (await res.json()) as Array<Record<string, unknown>>;
   return data
     .filter((row) => typeof row.id !== "undefined" && typeof row.position === "string")
-    .slice(0, limit)
     .map((row) => {
       const tags = Array.isArray(row.tags)
         ? row.tags.filter((t): t is string => typeof t === "string")
@@ -125,40 +164,101 @@ async function fetchRemoteOk(limit: number): Promise<JobListing[]> {
               ? new Date(row.epoch * 1000).toISOString()
               : null,
       };
-    });
+    })
+    .filter(hasDotNetSignal)
+    .slice(0, limit);
+}
+
+async function fetchArbeitnowDotNet(limit: number): Promise<JobListing[]> {
+  const res = await fetch("https://www.arbeitnow.com/api/job-board-api", {
+    headers: { "User-Agent": "job-hunter-agent/0.1" },
+  });
+  if (!res.ok) throw new Error(`Arbeitnow HTTP ${res.status}`);
+  const data = (await res.json()) as {
+    data?: Array<{
+      slug?: string;
+      title?: string;
+      company_name?: string;
+      url?: string;
+      location?: string;
+      remote?: boolean;
+      tags?: string[];
+      description?: string;
+      created_at?: number | string;
+    }>;
+  };
+
+  return (data.data ?? [])
+    .map((job) => {
+      const listing: JobListing = {
+        id: `arbeitnow:${job.slug ?? job.url ?? job.title ?? Math.random()}`,
+        source: "arbeitnow",
+        title: job.title ?? "Untitled",
+        company: job.company_name ?? "Unknown",
+        url: job.url ?? "",
+        location: job.remote ? `Remote · ${job.location ?? ""}`.trim() : (job.location ?? "Unknown"),
+        tags: job.tags ?? [],
+        description: truncate(job.description ?? ""),
+        salary: null,
+        publishedAt:
+          typeof job.created_at === "number"
+            ? new Date(job.created_at * 1000).toISOString()
+            : typeof job.created_at === "string"
+              ? job.created_at
+              : null,
+      };
+      return listing;
+    })
+    .filter(hasDotNetSignal)
+    .slice(0, limit);
 }
 
 export async function searchJobListings(input: {
   query?: string;
   keywords?: string[];
   limit?: number;
+  requireDotNet?: boolean;
 }): Promise<{ jobs: JobListing[]; sources: Record<string, string>; keywordHits: number }> {
-  const limit = Math.min(Math.max(input.limit ?? 12, 1), 25);
+  const limit = Math.min(Math.max(input.limit ?? 15, 1), 50);
+  const requireDotNet = input.requireDotNet !== false;
   const keywords = (input.keywords?.length ? input.keywords : DEFAULT_KEYWORDS).map((k) =>
     k.toLowerCase(),
   );
-  const perSource = Math.max(limit * 3, 30);
+  const perSource = Math.max(limit * 5, 50);
   const sources: Record<string, string> = {};
   const collected: JobListing[] = [];
 
-  try {
-    collected.push(...(await fetchRemotive(perSource)));
-    sources.remotive = "ok";
-  } catch (error) {
-    sources.remotive = error instanceof Error ? error.message : "failed";
-  }
+  const tasks: Array<[string, () => Promise<JobListing[]>]> = [
+    ["remotive", () => fetchRemotiveDotNet(perSource)],
+    ["remoteok", () => fetchRemoteOk(perSource)],
+    ["arbeitnow", () => fetchArbeitnowDotNet(perSource)],
+  ];
 
-  try {
-    collected.push(...(await fetchRemoteOk(perSource)));
-    sources.remoteok = "ok";
-  } catch (error) {
-    sources.remoteok = error instanceof Error ? error.message : "failed";
-  }
+  await Promise.all(
+    tasks.map(async ([name, fn]) => {
+      try {
+        collected.push(...(await fn()));
+        sources[name] = "ok";
+      } catch (error) {
+        sources[name] = error instanceof Error ? error.message : "failed";
+      }
+    }),
+  );
 
-  const filtered = collected
+  const byId = new Map<string, JobListing>();
+  for (const job of collected) byId.set(job.id, job);
+
+  const filtered = [...byId.values()]
+    .filter((job) => (requireDotNet ? hasDotNetSignal(job) : true))
+    // Drop marketplace mega-tag noise unless the title itself is .NET/C#
+    .filter((job) => {
+      const company = normalize(job.company);
+      if (company.includes("lemon.io") && !hasDotNetInTitle(job)) return false;
+      return true;
+    })
     .filter((job) => matchesQuery(job, input.query))
     .map((job) => ({ job, score: scoreAgainstKeywords(job, keywords) }))
-    .filter((row) => row.score > 0 || !input.query)
+    .filter((row) => row.score > 0 || Boolean(input.query))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
 
@@ -169,19 +269,22 @@ export async function searchJobListings(input: {
   };
 }
 
-export function rankJobAgainstProfile(job: {
-  title: string;
-  company: string;
-  location: string;
-  tags?: string[];
-  description?: string;
-}, profileText: string): {
+export function rankJobAgainstProfile(
+  job: {
+    title: string;
+    company: string;
+    location: string;
+    tags?: string[];
+    description?: string;
+  },
+  profileText: string,
+): {
   score: number;
   reasons: string[];
   gaps: string[];
 } {
-  // Tags-only boards (e.g. Lemon.io mega-lists) inflate matches — weight title/body more.
   const title = normalize(job.title);
+  const company = normalize(job.company);
   const body = normalize([job.company, job.location, job.description ?? ""].join(" "));
   const tags = normalize((job.tags ?? []).slice(0, 12).join(" "));
   const profile = normalize(profileText);
@@ -190,21 +293,26 @@ export function rankJobAgainstProfile(job: {
   let score = 0;
 
   const positives: Array<[string, number, string]> = [
-    [".net", 22, "Strong .NET match"],
-    ["c#", 20, "C# mentioned"],
-    ["asp.net", 14, "ASP.NET stack"],
-    ["tech lead", 18, "Leadership title fit"],
+    [".net", 28, "Strong .NET match"],
+    ["dotnet", 28, "Strong .NET match"],
+    ["c#", 26, "C# mentioned"],
+    ["csharp", 26, "C# mentioned"],
+    ["asp.net", 18, "ASP.NET stack"],
+    ["aspnet", 18, "ASP.NET stack"],
+    ["tech lead", 16, "Leadership title fit"],
     ["engineering lead", 14, "Lead role"],
+    ["senior", 6, "Senior level"],
     ["backend", 12, "Backend focus"],
     ["microservices", 8, "Microservices"],
     ["fintech", 10, "Fintech domain"],
     ["bank", 8, "Banking domain"],
     ["oracle", 6, "Oracle experience"],
     ["postgresql", 6, "PostgreSQL"],
-    ["azure", 5, "Azure"],
+    ["azure", 8, "Azure"],
     ["aws", 4, "AWS"],
   ];
 
+  const seenLabels = new Set<string>();
   for (const [needle, points, label] of positives) {
     const inTitle = title.includes(needle);
     const inBody = body.includes(needle);
@@ -213,29 +321,44 @@ export function rankJobAgainstProfile(job: {
 
     let gained = 0;
     if (inTitle) gained += points;
-    else if (inBody) gained += Math.floor(points * 0.7);
-    else gained += Math.floor(points * 0.2); // tags-only: weak signal
+    else if (inBody) gained += Math.floor(points * 0.75);
+    else gained += Math.floor(points * 0.25);
 
     if (profile.includes(needle.replace("bank", "banking").split(" ")[0]!)) {
       score += gained;
-      reasons.push(inTitle ? label : `${label}${inTags && !inBody ? " (tags)" : ""}`);
     } else {
       score += Math.floor(gained / 2);
-      reasons.push(`${label} (job-side)`);
+    }
+    if (!seenLabels.has(label)) {
+      seenLabels.add(label);
+      reasons.push(inTitle ? label : `${label}${inTags && !inBody ? " (tags)" : ""}`);
     }
   }
 
-  if ((title.includes("react") || title.includes("frontend") || title.includes("rails")) &&
-      !title.includes(".net") && !title.includes("c#") && !title.includes("backend")) {
-    score -= 18;
-    gaps.push("Title stack looks off-profile (.NET/backend lead)");
+  const stackInTitle = hasDotNetInTitle({ title: job.title });
+  if (stackInTitle) {
+    score += 12;
+    reasons.unshift(".NET/C# in title");
+  } else {
+    score -= 6;
+    gaps.push("Title doesn't mention .NET/C# explicitly");
+  }
+
+  if (company.includes("lemon.io") && !stackInTitle) {
+    score -= 25;
+    gaps.push("Marketplace listing without .NET in title");
+  }
+
+  if (
+    (title.includes("react") || title.includes("frontend") || title.includes("rails") || title.includes("php")) &&
+    !stackInTitle
+  ) {
+    score -= 20;
+    gaps.push("Title stack looks off-profile (.NET/backend)");
   }
   if (title.includes("junior") || title.includes("intern")) {
     score -= 20;
     gaps.push("Seniority looks below Tech Lead / Senior");
-  }
-  if (!body.includes("remote") && !title.includes("remote") && body.includes("on-site")) {
-    gaps.push("May require on-site; confirm relocation/hybrid");
   }
 
   score = Math.max(0, Math.min(100, score));

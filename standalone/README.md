@@ -36,8 +36,9 @@ El schedule del workflow: `0 12 * * 1-5` UTC = 09:00 America/Asuncion.
 
 | Env | Default |
 | --- | --- |
-| `JOB_QUERY` | _(vacío = solo keywords del perfil)_ |
-| `JOB_LIMIT` | `10` |
-| `JOB_MIN_SCORE` | `20` |
+| `JOB_QUERY` | `.net,c#,csharp,asp.net,dotnet` |
+| `JOB_LIMIT` | `15` |
+| `JOB_MIN_SCORE` | `12` |
+| `JOB_REQUIRE_DOTNET` | `true` |
 
 Editá el perfil en `bot/sandbox/workspace/profile.md`.

@@ -15,10 +15,11 @@ const root = path.resolve(here, "..");
 const profilePath = path.join(root, "bot/sandbox/workspace/profile.md");
 const statePath = path.join(root, ".standalone-state/seen.json");
 
-// Empty query = rank by profile keywords only (recommended).
-const QUERY = process.env.JOB_QUERY ?? "";
-const LIMIT = Number(process.env.JOB_LIMIT ?? "10");
-const MIN_SCORE = Number(process.env.JOB_MIN_SCORE ?? "20");
+// Prefer .NET-focused search (Remotive search=.net/csharp + RemoteOK filter).
+const QUERY = process.env.JOB_QUERY ?? ".net,c#,csharp,asp.net,dotnet";
+const LIMIT = Number(process.env.JOB_LIMIT ?? "15");
+const MIN_SCORE = Number(process.env.JOB_MIN_SCORE ?? "12");
+const REQUIRE_DOTNET = (process.env.JOB_REQUIRE_DOTNET ?? "true").toLowerCase() !== "false";
 const DRY_RUN = process.argv.includes("--dry-run");
 
 type SeenState = { ids: string[]; updatedAt: string };
@@ -112,7 +113,8 @@ async function main(): Promise<void> {
 
   const { jobs, sources } = await searchJobListings({
     query: QUERY,
-    limit: Math.min(Math.max(LIMIT * 2, 10), 25),
+    limit: Math.min(Math.max(LIMIT * 3, 20), 40),
+    requireDotNet: REQUIRE_DOTNET,
   });
 
   const ranked = jobs

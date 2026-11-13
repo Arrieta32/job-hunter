@@ -12,7 +12,13 @@ export default defineAgent({
     ],
   },
   hosting: {
-    egressDomains: ["remotive.com", "remoteok.com", "www.remoteok.com"],
+    egressDomains: [
+      "remotive.com",
+      "remoteok.com",
+      "www.remoteok.com",
+      "www.arbeitnow.com",
+      "arbeitnow.com",
+    ],
     secretNames: [
       "JOB_HUNTER_SLACK_BOT_TOKEN",
       "JOB_HUNTER_SLACK_APP_TOKEN",
